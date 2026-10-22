@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Reforger Launcher. Build with build.ps1, which publishes one ReforgerLauncher.exe into the folder above (it uses
+       that folder's config*.json, start-server.bat, addons\ and mod-src\). Needs the .NET 10 Desktop Runtime. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>ReforgerLauncher</AssemblyName>
+    <RootNamespace>ReforgerLauncher</RootNamespace>
+    <ApplicationIcon>launcher.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <DebugType>embedded</DebugType>
+    <Product>Reforger Launcher</Product>
+    <Version>1.0.0</Version>
+    <NoWarn>$(NoWarn);CA1416;WFO1000</NoWarn>
+  </PropertyGroup>
+
+</Project>
