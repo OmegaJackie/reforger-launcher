@@ -39,6 +39,10 @@ public class AdvancedOptions
     public bool NoSound { get; set; }
     public string Extra { get; set; } = "";
     public bool Minimize { get; set; }
+    // START SERVER runs the server inside the launcher (Console tab) rather than in start-server.bat's window.
+    public bool ServerInApp { get; set; } = true;
+    // The launcher starts its server again when it stops by itself (as start-server.bat does).
+    public bool AutoRestart { get; set; } = true;
 }
 
 public class LauncherStore
@@ -50,6 +54,8 @@ public class LauncherStore
     // view: the files stay next to start-server.bat, which needs them there.
     public List<string> ConfigFolders { get; set; } = new();
     public Dictionary<string, string> ConfigFolderOf { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    // Configs whose owner said no to turning RCON on (asked once each).
+    public List<string> RconOffered { get; set; } = new();
 
     [System.Text.Json.Serialization.JsonIgnore] public string File;
 
@@ -64,7 +70,7 @@ public class LauncherStore
         LauncherStore data = null;
         try { if (System.IO.File.Exists(path)) data = JsonSerializer.Deserialize<LauncherStore>(System.IO.File.ReadAllText(path), Options); } catch { data = null; }
         data ??= new LauncherStore();
-        data.Servers ??= new(); data.Logs ??= new(); data.Advanced ??= new();
+        data.Servers ??= new(); data.Logs ??= new(); data.Advanced ??= new(); data.RconOffered ??= new();
         data.ConfigFolders = (data.ConfigFolders ?? new()).Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var folderOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (k, v) in data.ConfigFolderOf ?? new()) if (!string.IsNullOrEmpty(k) && !string.IsNullOrEmpty(v)) folderOf[k] = v;

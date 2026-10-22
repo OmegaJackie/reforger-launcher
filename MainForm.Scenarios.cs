@@ -219,7 +219,7 @@ public partial class MainForm
             return;
         }
         if (App.ServerDir == null) { Ui.Message("ArmaReforgerServer.exe wasn't found (start-server.bat's SERVER_DIR or Steam), so multiplayer scenarios can't be played locally.", MessageBoxIcon.Error); return; }
-        if (!ConfirmNoServer()) return;
+        if (!ConfirmPortFree(2001)) return;
         string admin = ""; bool load = false;
         if (item is ConfigItem c)
         {
@@ -284,7 +284,7 @@ public partial class MainForm
             string serverName = "", scenarioId = "";
             try { var cfg = Json.Parse(File.ReadAllText(pub.Config)); serverName = Json.Str(cfg, "game.name"); scenarioId = Json.Str(cfg, "game.scenarioId"); } catch { }
             if (s != null && scenarioId.Length > 0 && scenarioId != s.Id && !Ui.Ask("Your public server is running a different scenario. Open the game to join it anyway?")) return;
-            if (serverName.Length > 0) Clipboard.SetText(serverName);
+            if (serverName.Length > 0) Ui.Copy(serverName);
             Launch.Open($"steam://rungameid/{Game.AppId}");
             Ui.Message($"Opening the game. Join your server from its server browser: search for \"{serverName}\" (copied to the clipboard).");
             return;

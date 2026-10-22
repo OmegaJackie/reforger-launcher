@@ -140,18 +140,71 @@ public class Launch
         return "";
     }
 
-    // Stops every dedicated server, including start-server.bat's restart loop (else it restarts the server 15 s later).
-    public void StopServers()
+    // The port a server plays on: from its log, else its config, else the default 2001.
+    public int PortOf(ServerProc proc)
     {
-        foreach (var (p, cl) in Native.ProcessesNamed("cmd"))
-            if (cl.Contains("start-server.bat", StringComparison.OrdinalIgnoreCase))
-            {
-                try { Process.Start(new ProcessStartInfo("taskkill.exe", $"/PID {p.Id} /T /F") { CreateNoWindow = true, UseShellExecute = false })?.WaitForExit(5000); } catch { }
-            }
-        foreach (var s in Servers())
-            try { Process.GetProcessById(s.Id).Kill(); } catch { }
+        var si = Info(proc);
+        return si.Port > 0 ? si.Port : si.ConfigPort > 0 ? si.ConfigPort : 2001;
     }
 
+    public static int PortOf(System.Text.Json.Nodes.JsonObject config)
+    {
+        long p = Json.Long(config, "bindPort");
+        if (p == 0) p = Json.Long(config, "publicPort");
+        return p > 0 ? (int)p : 2001;
+    }
+
+    // Where a server's RCON listens and its password, from its config ("rcon" section); null when it has none.
+    public (string Host, int Port, string Password)? RconOf(ServerProc proc)
+    {
+        if (proc == null || proc.Config.Length == 0) return null;
+        try
+        {
+            var cfg = Json.Parse(File.ReadAllText(proc.Config));
+            var password = Json.Str(cfg, "rcon.password");
+            if (cfg is not System.Text.Json.Nodes.JsonObject o || !Json.Has(o, "rcon") || password.Length == 0) return null;
+            var host = Json.Str(cfg, "rcon.address");
+            if (host.Length == 0 || host == "0.0.0.0") host = "127.0.0.1";
+            long port = Json.Long(cfg, "rcon.port");
+            return (host, port > 0 ? (int)port : 19999, password);
+        }
+        catch { return null; }
+    }
+
+    // Test hook: when set, StartServer calls it instead of starting the server.
+    public Func<ProcessStartInfo, Process> StartServerHook;
+
+    // The dedicated server with a config and no window of its own: the launcher's Console tab shows its log and talks to
+    // it over RCON. The same options as start-server.bat; the launcher does the restarting.
+    public Process StartServer(string configPath)
+    {
+        var psi = new ProcessStartInfo(Path.Combine(app.ServerDir, "ArmaReforgerServer.exe")) { WorkingDirectory = app.ServerDir, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in new[] { "-config", configPath, "-profile", Path.Combine(app.Root, "profile"), "-addonDownloadDir", app.Root, "-maxFPS", "60", "-logStats", "60000", "-backendlog", "-nothrow" })
+            psi.ArgumentList.Add(a);
+        return StartServerHook != null ? StartServerHook(psi) : Process.Start(psi);
+    }
+
+    // Stops one server the way its console would: RCON #shutdown when connected, else Ctrl+C. Either way it saves its
+    // persistence first and exits within seconds; only one that doesn't answer is killed. A server started by
+    // start-server.bat has the batch file's restart loop ended first (its cmd only - the server must exit by itself).
+    public async Task<bool> StopServerAsync(ServerProc proc, RconClient rcon, int waitMs = 60000)
+    {
+        Process p;
+        try { p = Process.GetProcessById(proc.Id); } catch { return true; }
+        int parent = Native.ParentId(proc.Id);
+        if (parent > 0)
+            foreach (var (cmd, cl) in Native.ProcessesNamed("cmd"))
+                if (cmd.Id == parent && cl.Contains("start-server.bat", StringComparison.OrdinalIgnoreCase)) { try { cmd.Kill(); } catch { } }
+        bool asked = false;
+        if (rcon is { LoggedIn: true, Closed: false })
+        {
+            try { await rcon.SendAsync("#shutdown", 3000, 0); asked = true; } catch { }
+        }
+        if (!asked) asked = Native.SendCtrlC(proc.Id);
+        if (asked && await Task.Run(() => p.WaitForExit(waitMs))) return true;
+        try { p.Kill(); } catch { }
+        return await Task.Run(() => p.WaitForExit(5000));
+    }
     // Where each mod is on disk for a local game: unpublished project, the game's downloads, or the server's addons\ (in
     // that order of preference).
     public LocalPlan Plan(ModList holder)
@@ -184,9 +237,10 @@ public class Launch
         return a;
     }
 
+    // A PLAY test server: no window either; the Console tab shows its log.
     public void StartLocalServer(List<string> args) =>
         Process.Start(new ProcessStartInfo(Path.Combine(app.ServerDir, "ArmaReforgerServer.exe"), Native.JoinArgs(args))
-        { WorkingDirectory = app.ServerDir, UseShellExecute = true, WindowStyle = ProcessWindowStyle.Minimized });
+        { WorkingDirectory = app.ServerDir, UseShellExecute = false, CreateNoWindow = true });
 
     public static List<string> ModArgs(IEnumerable<string> dirs, string addons)
     {

@@ -2,13 +2,14 @@ using System.Text.RegularExpressions;
 
 namespace ReforgerLauncher;
 
-// The launcher window: tabs across the top (History, Favorites, Server, Advanced) in A3Launcher's layout and Arma
-// Reforger's colours. History / Favorites have the server filters on the left; Server has the Server Configs list (in
-// folders, then the game's own mod presets) on the left and the selected one on the right with its Configuration /
-// Scenarios / Mods tabs. Descriptions are tooltips. The footer has the status line and Save all.
+// The launcher window: tabs across the top (History, Favorites, Server, Console, Advanced) in A3Launcher's layout and
+// Arma Reforger's colours. History / Favorites have the server filters on the left; Server has the Server Configs list
+// (in folders, then the game's own mod presets) on the left and the selected one on the right with its Configuration /
+// Scenarios / Mods tabs; Console is the running server's log, players and RCON. Descriptions are tooltips. The footer
+// has the status line and Save all.
 public partial class MainForm : Form
 {
-    public static readonly string[] PageTabs = { "History", "Favorites", "Server", "Advanced" };
+    public static readonly string[] PageTabs = { "History", "Favorites", "Server", "Console", "Advanced" };
 
     public readonly App App;
     public readonly Launch Launch;
@@ -58,6 +59,7 @@ public partial class MainForm : Form
         var content = new Panel { Dock = DockStyle.Fill };
         pages["Servers"] = BuildServersPage();   // History and Favorites
         pages["Server"] = BuildItemPane();
+        pages["Console"] = BuildConsolePage();
         pages["Advanced"] = BuildAdvancedPage();
         foreach (var p in pages.Values) content.Controls.Add(p);
 
@@ -76,12 +78,13 @@ public partial class MainForm : Form
         Shown += (s, e) =>
         {
             serverTimer.Start();
+            tailTimer.Start();
             if (Page == "Server" && SubTab == "Configuration") BeginInvoke(() => Ui.Safe(() => ShowSubTab("Configuration", false)));
             if (App.BadConfigs.Count > 0) Ui.Message("These files were skipped:\n\n" + string.Join("\n", App.BadConfigs), MessageBoxIcon.Warning);
             if (Page is "History" or "Favorites" && !serversLoaded) { serversLoaded = true; Ui.Safe(RefreshServers); }
         };
         FormClosing += OnClosing;
-        FormClosed += (s, e) => { serverTimer.Stop(); queryTimer.Stop(); };
+        FormClosed += (s, e) => { serverTimer.Stop(); queryTimer.Stop(); tailTimer.Stop(); CloseRcon(); };
 
         UpdateTree(null);
         ShowPage("Server");
@@ -109,7 +112,8 @@ public partial class MainForm : Form
             tabs[p] = l;
             flow.Controls.Add(l);
         }
-        serverStatus = new Label { AutoSize = true, Margin = new Padding(3, 21, 18, 3), Font = new Font("Segoe UI Semibold", 9.5f) };
+        serverStatus = new Label { AutoSize = true, Margin = new Padding(3, 21, 18, 3), Font = new Font("Segoe UI Semibold", 9.5f), Cursor = Cursors.Hand };
+        serverStatus.Click += (s, e) => Ui.Safe(() => ShowPage("Console"));
         Label Link(string text, Action act, string tip)
         {
             var l = new Label { Text = text, AutoSize = true, Cursor = Cursors.Hand, Margin = new Padding(2, 22, 2, 3), Tag = "link" };
@@ -120,7 +124,7 @@ public partial class MainForm : Form
             return l;
         }
         Label Bar() => new() { Text = "|", AutoSize = true, Margin = new Padding(2, 22, 2, 3), Tag = "dim" };
-        stopLink = Link("stop server", StopServer, "Stops every dedicated server on this PC, including start-server.bat's restart loop.");
+        stopLink = Link("stop server", () => StopConsoleServer(true), "Stops the server the Console tab shows, cleanly: it saves its progress first.");
         var right = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, WrapContents = false };
         right.Controls.AddRange(new Control[] { serverStatus, stopLink, Bar(),
             Link("server log", OpenServerLog, "The running server's console.log (or the last local test's)."), Bar(),
@@ -244,10 +248,11 @@ public partial class MainForm : Form
         foreach (var (k, p) in pages) p.Visible = k == panel;
         Page = name;
         foreach (var (k, l) in tabs) { l.ForeColor = Theme.C(k == name ? "TabOn" : "TabOff"); l.Invalidate(); }
-        side.Visible = panel != "Advanced";
+        side.Visible = panel is not ("Advanced" or "Console");
         sideFilters.Visible = panel == "Servers";
         sideConfigs.Visible = panel == "Server";
         if (panel == "Server") ShowCurrentItem();
+        if (panel == "Console") { FillConfigCombo(); UpdateConsoleHeader(); UpdateRconState(); ScrollLogToEnd(); }
         if (panel == "Servers")
         {
             serverTab = name;
@@ -522,6 +527,7 @@ public partial class MainForm : Form
     void UpdateServerStatus()
     {
         var procs = Launch.Servers();
+        UpdateConsoleProc(procs);
         // "stop server" is dimmed while nothing runs (a disabled label is near invisible on the dark).
         serverRunning = procs.Count > 0;
         stopLink.ForeColor = Theme.C(serverRunning ? "Link" : "Dim");
@@ -547,12 +553,12 @@ public partial class MainForm : Form
         }
         if (procs.Count == 0)
         {
-            serverStatus.Text = "No server running";
-            serverStatus.ForeColor = Theme.C("Dim");
-            Tips.Set(serverStatus, "START SERVER on a server config, or PLAY a multiplayer scenario, starts one.");
+            serverStatus.Text = restartAt != null ? $"\u25CF  Restarting in {Math.Max(0, (int)(restartAt.Value - DateTime.Now).TotalSeconds)} s" : "No server running";
+            serverStatus.ForeColor = Theme.C(restartAt != null ? "Warn" : "Dim");
+            Tips.Set(serverStatus, "START SERVER on a server config, or PLAY a multiplayer scenario, starts one. Click for the Console.");
             return;
         }
-        var p0 = procs[0];
+        var p0 = ConsoleProc != null ? procs.FirstOrDefault(p => p.Id == ConsoleProc.Id) ?? procs[0] : procs[0];
         var info = Launch.Info(p0);
         var address = Launch.AddressOf(p0);
         int minutes = (int)(DateTime.Now - p0.Started).TotalMinutes;
@@ -567,26 +573,8 @@ public partial class MainForm : Form
         tip.Add(p0.Mode switch { "public" => $"Config: {Path.GetFileName(p0.Config)}", "local" => "Local test (PLAY): this PC only", _ => "" });
         tip.Add($"{(info.Ready ? "Ready" : "Starting")} - running {minutes} min (process {p0.Id})");
         if (procs.Count > 1) tip.Add($"{procs.Count - 1} more server(s) running");
+        tip.Add("Click for the Console: log, players, RCON.");
         Tips.Set(serverStatus, string.Join("\n", tip.Where(x => x != null)));
-    }
-
-    bool ConfirmNoServer()
-    {
-        if (Launch.Servers().Count == 0) return true;
-        if (!Ui.Ask("A server is already running (only one can use port 2001). Stop it and continue?")) return false;
-        Launch.StopServers();
-        Thread.Sleep(2000);
-        return true;
-    }
-
-    void StopServer()
-    {
-        if (Launch.Servers().Count == 0) return;
-        if (!Ui.Ask("Stop the running server? Anyone on it is disconnected.")) return;
-        pendingJoin = null;
-        Launch.StopServers();
-        Thread.Sleep(800);
-        UpdateServerStatus();
     }
 
     void OpenServerLog()
@@ -597,13 +585,15 @@ public partial class MainForm : Form
         Launch.Open(log.FullName);
     }
 
-    // Starts the dedicated server with a server config through start-server.bat (saving the config first if needed).
-    public void StartServerFor(ConfigItem item)
+    // Starts the dedicated server with a config (saving it first if needed): inside the launcher, shown on the Console tab,
+    // or - with that turned off on Advanced - through start-server.bat in its own window.
+    public void StartServerFor(ConfigItem item, bool inApp = false)
     {
+        inApp |= App.Data.Advanced.ServerInApp;
         if (string.IsNullOrEmpty(item.ScenarioId)) { Ui.Message("Pick a scenario for this config first (its Scenarios tab)."); return; }
         if (App.ServerDir == null) { Ui.Message("ArmaReforgerServer.exe wasn't found (start-server.bat's SERVER_DIR or Steam).", MessageBoxIcon.Error); return; }
         var bat = Path.Combine(App.Root, "start-server.bat");
-        if (!File.Exists(bat)) { Ui.Message($"start-server.bat is missing from {App.Root}.", MessageBoxIcon.Error); return; }
+        if (!inApp && !File.Exists(bat)) { Ui.Message($"start-server.bat is missing from {App.Root}.", MessageBoxIcon.Error); return; }
         // The server downloads every mod from the Workshop: unpublished ones make it fail.
         List<string> notOnWorkshop;
         SetBusy(true, "Checking the mods are on the Workshop...");
@@ -624,7 +614,14 @@ public partial class MainForm : Form
             UpdateTitle();
             UpdateItemHeader();
         }
-        if (!ConfirmNoServer()) return;
+        if (inApp) OfferRcon(item);
+        if (!ConfirmPortFree(Launch.PortOf(item.Config))) return;
+        if (inApp)
+        {
+            StartInApp(item.Path, true);
+            Status.Text = $"Started {item.Name} inside the launcher.";
+            return;
+        }
         // start-server.bat uses SERVER_DIR when it doesn't set its own (the shipped one doesn't): the server found here.
         Environment.SetEnvironmentVariable("SERVER_DIR", App.ServerDir);
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(bat, item.Name) { WorkingDirectory = App.Root, UseShellExecute = true });
@@ -918,8 +915,8 @@ public partial class MainForm : Form
         if (item == null) { Ui.Message("Pick a server config or game preset first."); return; }
         switch (how)
         {
-            case "clipJson": Clipboard.SetText(Mods.ServerModsJson(item)); Status.Text = $"Copied {item.Mods.Count} mods as a server config mods array."; break;
-            case "clipText": Clipboard.SetText(Mods.ListText(item)); Status.Text = $"Copied {item.Mods.Count} mods as a list."; break;
+            case "clipJson": Ui.Copy(Mods.ServerModsJson(item)); Status.Text = $"Copied {item.Mods.Count} mods as a server config mods array."; break;
+            case "clipText": Ui.Copy(Mods.ListText(item)); Status.Text = $"Copied {item.Mods.Count} mods as a list."; break;
             default:
                 using (var sfd = new SaveFileDialog { InitialDirectory = App.Root, FileName = Regex.Replace(Regex.Replace(item.Name, @"\.json$", ""), "[\\\\/:*?\"<>|]", "_") })
                 {
@@ -936,14 +933,18 @@ public partial class MainForm : Form
 
     void OnClosing(object sender, FormClosingEventArgs e)
     {
-        if (!App.Dirty) return;
-        var answer = Ui.Message("Save your changes before closing?", MessageBoxIcon.Question, MessageBoxButtons.YesNoCancel);
-        if (answer == DialogResult.Cancel) e.Cancel = true;
-        else if (answer == DialogResult.Yes)
+        if (App.Dirty)
         {
-            bool saved = false;
-            try { saved = SaveAll(); } catch (Exception ex) { SetBusy(false); Ui.Message(ex.Message, MessageBoxIcon.Error); }
-            if (!saved) e.Cancel = true;
+            var answer = Ui.Message("Save your changes before closing?", MessageBoxIcon.Question, MessageBoxButtons.YesNoCancel);
+            if (answer == DialogResult.Cancel) { e.Cancel = true; return; }
+            if (answer == DialogResult.Yes)
+            {
+                bool saved = false;
+                try { saved = SaveAll(); } catch (Exception ex) { SetBusy(false); Ui.Message(ex.Message, MessageBoxIcon.Error); }
+                if (!saved) { e.Cancel = true; return; }
+            }
+            else { foreach (var i in App.AllItems()) i.Changed = false; App.PresetsDirty = false; App.DeletedConfigs.Clear(); }   // not asked again if a running server delays the close
         }
+        AskAboutServerOnClose(e);
     }
 }

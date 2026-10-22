@@ -333,7 +333,7 @@ public static class Tips
     {
         if (c == null || string.IsNullOrEmpty(text)) return;
         tip ??= Make();
-        tip.SetToolTip(c, text);
+        if (tip.GetToolTip(c) != text) tip.SetToolTip(c, text);   // the same text again would close an open tip
     }
 
     public static void Set(string text, params Control[] controls) { foreach (var c in controls) Set(c, text); }
@@ -469,6 +469,13 @@ public static class Ui
     }
 
     public static bool Ask(string text) => Message(text, MessageBoxIcon.Question, MessageBoxButtons.YesNo) == DialogResult.Yes;
+    // Text to the clipboard, retrying while another program holds it (a busy clipboard throws otherwise).
+    public static void Copy(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        try { Clipboard.SetDataObject(text, true, 10, 100); }
+        catch (System.Runtime.InteropServices.ExternalException) { Message("The clipboard is busy (another program has it open) - nothing was copied.", MessageBoxIcon.Warning); }
+    }
 
     public static void ShowError(Exception ex)
     {
@@ -484,8 +491,11 @@ public static class Ui
 
     public static Func<string, string, string> InputHook;   // tests answer here
 
-    // A one-line question in the launcher's colours.
-    public static string Input(string prompt, string value)
+    // A one-line question in the launcher's colours: the answer, "" when cancelled.
+    public static string Input(string prompt, string value) => InputOrCancel(prompt, value) ?? "";
+
+    // The same, null when cancelled (an empty answer can mean something).
+    public static string InputOrCancel(string prompt, string value)
     {
         if (InputHook != null) return InputHook(prompt, value);
         using var f = new Form
@@ -503,6 +513,6 @@ public static class Ui
         Theme.Style(f);
         f.Shown += (s, e) => { box.Focus(); box.SelectAll(); };
         f.Load += (s, e) => { if (label.Bottom + 10 > box.Top) { int dy = label.Bottom + 12 - box.Top; box.Top += dy; ok.Top += dy; cancel.Top += dy; f.ClientSize = new Size(f.ClientSize.Width, f.ClientSize.Height + dy); } };
-        return f.ShowDialog(Owner) == DialogResult.OK ? box.Text.Trim() : "";
+        return f.ShowDialog(Owner) == DialogResult.OK ? box.Text.Trim() : null;
     }
 }

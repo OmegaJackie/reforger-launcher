@@ -18,7 +18,7 @@
     <PublishSingleFile>true</PublishSingleFile>
     <DebugType>embedded</DebugType>
     <Product>Reforger Launcher</Product>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <NoWarn>$(NoWarn);CA1416;WFO1000</NoWarn>
   </PropertyGroup>
 

@@ -67,6 +67,53 @@ static class Native
         };
     }
 
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool AttachConsole(uint pid);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool FreeConsole();
+    [DllImport("kernel32.dll")] static extern bool SetConsoleCtrlHandler(IntPtr handler, bool add);
+    [DllImport("kernel32.dll")] static extern bool GenerateConsoleCtrlEvent(uint ctrlEvent, uint processGroup);
+    static readonly object consoleLock = new();
+
+    // Ctrl+C to a console program running without a window (what pressing it in its console does). The launcher borrows
+    // the program's console for it and ignores the Ctrl+C itself meanwhile.
+    public static bool SendCtrlC(int pid)
+    {
+        lock (consoleLock)
+        {
+            FreeConsole();
+            if (!AttachConsole((uint)pid)) return false;
+            SetConsoleCtrlHandler(IntPtr.Zero, true);
+            bool ok = GenerateConsoleCtrlEvent(0, 0);   // CTRL_C_EVENT to everything on that console
+            Thread.Sleep(300);                         // delivered asynchronously: stay deaf to it until it has been
+            FreeConsole();
+            SetConsoleCtrlHandler(IntPtr.Zero, false);
+            return ok;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct BasicInformation { public IntPtr ExitStatus, Peb, Affinity, BasePriority, UniqueId, ParentId; }
+
+    // The process that started this one (0 when it can't be read).
+    public static int ParentId(int pid)
+    {
+        IntPtr h = OpenProcess(0x1000, false, pid);
+        if (h == IntPtr.Zero) return 0;
+        try
+        {
+            var info = new BasicInformation();
+            IntPtr buf = Marshal.AllocHGlobal(Marshal.SizeOf<BasicInformation>());
+            try
+            {
+                if (NtQueryInformationProcess(h, 0, buf, Marshal.SizeOf<BasicInformation>(), out _) != 0) return 0;
+                info = Marshal.PtrToStructure<BasicInformation>(buf);
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+            return (int)info.ParentId;
+        }
+        catch { return 0; }
+        finally { CloseHandle(h); }
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
 

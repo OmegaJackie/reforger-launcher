@@ -7,6 +7,7 @@ on [A3Launcher](https://a3launcher.com) and it uses Arma Reforger's own UI colou
 - edits your dedicated-server configs (`config*.json`), with every setting the server knows, and keeps them in folders
 - browses every scenario on your PC, and plays, hosts or joins it
 - edits the game's own mod presets, the lists in its in-game mod manager
+- runs your dedicated server inside the launcher, with its live log, players and an RCON console
 
 ![Server configs](docs/server-configs.png)
 
@@ -27,7 +28,7 @@ Unzip it into the folder where you keep (or want) your server configs. The launc
 | File | What it is |
 |---|---|
 | `config*.json` | Your server configs: `config.json`, `config.pve.json`, ... Make new ones in the launcher. |
-| `start-server.bat` | Starts the dedicated server with a config and restarts it if it exits. The launcher's START SERVER runs it. |
+| `start-server.bat` | Starts the dedicated server in its own window and restarts it if it exits. The launcher runs servers itself (Console tab); with that turned off on Advanced, START SERVER uses this instead. |
 | `launcher.json` | Written by the launcher: joined servers, favorites, launch options, config folders. |
 | `addons\` | Mods the dedicated server downloads (`-addonDownloadDir`). |
 | `mod-src\` | Optional: unpublished mod projects (Workbench `addon.gproj`), listed with their scenarios so you can PLAY them. |
@@ -80,11 +81,33 @@ name, full, empty, password, offline and scenario.
 
   A game preset shows only the Scenarios and Mods tabs.
 
+**Console** runs the dedicated server inside the launcher, with no window of its own. START SERVER (on a config, or
+here) starts it.
+
+- **Log:** its live log, colour-coded, with a find box and filters (everything, errors and warnings, or RCON).
+- **Players:** the players list with Kick and Ban (1 hour to permanent), plus Ban list and Unban.
+- **Command line:** sends RCON commands (`#players`, `#kick`, `#ban create|remove|list`, `#restart`, `#shutdown`), with
+  history on Up / Down.
+- **Stop and restart:** STOP and RESTART shut the server down cleanly: RCON `#shutdown`, or Ctrl+C without RCON. Either
+  way it saves its progress first.
+- **Auto-restart:** if the server stops by itself, the launcher starts it again after 15 s, like `start-server.bat`
+  does.
+
+The first time you start a config without RCON, the launcher offers to add it: local only (`127.0.0.1:19999`) with a
+generated password. The Console also shows servers started some other way (`start-server.bat`, PLAY tests) and stops
+just the one it shows. If you close the launcher while its server runs, you can stop the server or leave it running in
+the background; the Console picks it up again next time.
+
+> Reforger's `#restart` starts the scenario over as a **new playthrough**. It saves first but doesn't continue that
+> save. To restart and keep the progress, use RESTART, which restarts the server and continues the save when the config
+> has *continue from last save* on.
+
 **Advanced** holds the game's launch options (window, max FPS, no sound, extra parameters), which PLAY, JOIN and
 *open game* use, and the folders in use.
 
 **Top right** shows the running server's name and the address it registered with the server browser (read from its
-log). Hover it for the direct join code. Next to it are *stop server*, *server log*, *open game* and *workshop*.
+log). Hover it for the direct join code, or click it for the Console. Next to it are *stop server*, *server log*, *open
+game* and *workshop*.
 
 ![Configuration](docs/configuration.png)
 ![Scenarios](docs/scenarios.png)

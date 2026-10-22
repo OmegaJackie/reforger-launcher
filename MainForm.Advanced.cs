@@ -4,7 +4,7 @@ namespace ReforgerLauncher;
 // in each row's tooltip.
 public partial class MainForm
 {
-    CheckBox advWindow, advNoSound, advMinimize;
+    CheckBox advWindow, advNoSound, advMinimize, advInApp;
     NumericUpDown advMaxFps;
     TextBox advExtra;
     Label advPreview;
@@ -45,6 +45,9 @@ public partial class MainForm
         AddSection(grid, "LAUNCHER");
         advMinimize = Check("Minimize the launcher when the game starts", a.Minimize);
         Row("On launch", null, advMinimize);
+        advInApp = Check("Run the server inside the launcher", a.ServerInApp);
+        Row("Server", "On: START SERVER runs the dedicated server without a window of its own; the Console tab shows its log, players and RCON, " +
+            "and the launcher restarts it if it stops by itself.\n\nOff: start-server.bat runs it in its own console window, as before.", advInApp);
         AddSection(grid, "COMMAND LINE");
         advPreview = Ui.NewLabel("", 900, "label"); advPreview.Font = new Font("Consolas", 9f);
         Row("Game", "What starts the game, plus what PLAY / JOIN add (-client -addr ... -addons ...).", advPreview);
@@ -72,6 +75,7 @@ public partial class MainForm
         a.NoSound = advNoSound.Checked;
         a.Extra = advExtra.Text.Trim();
         a.Minimize = advMinimize.Checked;
+        a.ServerInApp = advInApp.Checked;
         SaveData();
         UpdateAdvancedPreview();
     }

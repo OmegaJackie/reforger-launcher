@@ -64,7 +64,7 @@ public partial class MainForm
             ("Mods...", () => { if (SelectedServer is { } r) ShowServerMods(r); }),
             ("Make a mod list from its mods...", () => { if (SelectedServer is { } r) PresetFromServer(r); }),
             ("Favorite on / off", () => { if (SelectedServer is { } r) SetFavourite(r, !r.Fav); }),
-            ("Copy address", () => { if (SelectedServer is { } r) Clipboard.SetText(r.Addr); }),
+            ("Copy address", () => { if (SelectedServer is { } r) Ui.Copy(r.Addr); }),
             ("Remove from the list", () => { if (SelectedServer is { } r) { r.Hidden = true; r.Fav = false; SaveData(); UpdateServerList(); } }));
         srvCount = Ui.NewLabel("", 0, "dim"); srvCount.Margin = new Padding(3, 4, 3, 6);
         page.Controls.Add(SrvList);
@@ -344,7 +344,7 @@ public partial class MainForm
                 $"Yes - join now with {with} (selected on the Server tab)\nNo - open the game and join it there (Direct connect; the address is copied)",
                 MessageBoxIcon.Question, MessageBoxButtons.YesNoCancel);
             if (answer == DialogResult.Cancel) return;
-            if (answer == DialogResult.No) { Clipboard.SetText(rec.Addr); Launch.StartGame(); Status.Text = $"Game starting - Direct connect to {rec.Addr} (copied)."; return; }
+            if (answer == DialogResult.No) { Ui.Copy(rec.Addr); Launch.StartGame(); Status.Text = $"Game starting - Direct connect to {rec.Addr} (copied)."; return; }
             mods = item != null ? item.Mods.Keys.ToList() : new List<string>();
         }
         var missing = mods.Where(g => !App.Installed.ContainsKey(g)).ToList();
@@ -354,7 +354,7 @@ public partial class MainForm
             var more = missing.Count > 15 ? $"\n... and {missing.Count - 15} more" : "";
             if (Ui.Ask($"{missing.Count} of {name}'s mods aren't downloaded:\n\n{names}{more}\n\nThe game downloads them when you join from its server browser. Open the game now? (The address is copied for Direct connect.)"))
             {
-                Clipboard.SetText(rec.Addr); Launch.StartGame();
+                Ui.Copy(rec.Addr); Launch.StartGame();
                 Status.Text = $"Game starting - Direct connect to {rec.Addr} (copied).";
             }
             return;

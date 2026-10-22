@@ -40,7 +40,7 @@ public partial class MainForm
         };
         modList.ContextMenuStrip = Ui.NewMenu(
             ("Open workshop page", () => { foreach (var it in modList.SelectedRows.Take(10)) Launch.Open(Game.WorkshopUrl + it.Tag); }),
-            ("Copy GUIDs", () => { var g = modList.SelectedRows.Select(i => (string)i.Tag).ToList(); if (g.Count > 0) Clipboard.SetText(string.Join("\r\n", g)); }),
+            ("Copy GUIDs", () => { var g = modList.SelectedRows.Select(i => (string)i.Tag).ToList(); if (g.Count > 0) Ui.Copy(string.Join("\r\n", g)); }),
             ("Open mod folder", () =>
             {
                 var first = modList.SelectedRows.FirstOrDefault();

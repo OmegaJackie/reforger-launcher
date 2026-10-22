@@ -41,6 +41,7 @@ public partial class MainForm
                 var preset = App.Doc.Presets.FirstOrDefault();
                 if (preset != null) { UpdateTree(preset); Snap("server-preset"); }
                 UpdateTree("configs"); Snap("server-configs");
+                ShowPage("Console"); Snap("console");
                 ShowPage("Advanced"); Snap("advanced");
                 File.WriteAllText(Path.Combine(dir, "exe-status.txt"), $"servers: {App.Data.Servers.Count}, answered: {Live.Values.Count(l => l.Online)}, scenarios: {App.Scenarios.Count}, mods: {App.Installed.Count}\n");
             }
