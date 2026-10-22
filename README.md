@@ -121,6 +121,10 @@ Command-line options:
 
 `make-icon.ps1` redraws `launcher.ico`.
 
+## License
+
+[MIT](LICENSE).
+
 ---
 
 Not affiliated with or endorsed by Bohemia Interactive. Arma and Arma Reforger are trademarks of Bohemia Interactive a.s.
