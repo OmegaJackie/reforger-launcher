@@ -74,6 +74,8 @@ name, full, empty, password, offline and scenario.
     scenario browser.
     - **PLAY** runs it on this PC with the list's mods: a local dedicated server for multiplayer scenarios, which the
       game joins by itself.
+    - **PLAY SOLO** (multiplayer scenarios) runs it inside the game itself, like the game's own Play: just you, no
+      separate server.
     - **HOST** makes it the config's scenario and starts the server. On a game preset, it makes a new config instead.
     - **JOIN** joins a running server.
   - **Mods**: every mod on your PC, ticked = in this list. You can also add mods from pasted text: GUIDs, workshop
@@ -90,8 +92,11 @@ here) starts it.
   history on Up / Down.
 - **Stop and restart:** STOP and RESTART shut the server down cleanly: RCON `#shutdown`, or Ctrl+C without RCON. Either
   way it saves its progress first.
-- **Auto-restart:** if the server stops by itself, the launcher starts it again after 15 s, like `start-server.bat`
-  does.
+- **Auto-restart:** if a running server crashes, the launcher starts it again after 15 s, like `start-server.bat` does
+  (at most 3 times in 10 minutes). A server that stops while starting isn't restarted; the Console shows the errors
+  from its log instead.
+- **Config check:** before starting, the launcher checks the config for things the server would refuse, such as an
+  `rcon` section without an address and password, and offers to complete the RCON settings.
 
 The first time you start a config without RCON, the launcher offers to add it: local only (`127.0.0.1:19999`) with a
 generated password. The Console also shows servers started some other way (`start-server.bat`, PLAY tests) and stops
@@ -119,6 +124,8 @@ game* and *workshop*.
 - *Add dependencies when saving* adds every mod the ticked mods need. It reads them from each mod's info, a project's
   `addon.gproj`, or the mod's workshop page.
 - The dedicated server downloads its mods from the Workshop, so unpublished mods only work with PLAY.
+- **Steam:** the game only starts with Steam running and logged in. PLAY, JOIN and *open game* start Steam first if
+  it isn't running, and wait for it to log in.
 - Others can only join your server if its public port (UDP, 2001 by default) is forwarded to your PC.
 
 ## Building

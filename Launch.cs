@@ -69,6 +69,11 @@ public class Launch
 
     public bool IsReady(ServerProc proc) => Info(proc).Ready;
 
+    // A server's console.log is in the newest log folder of its profile - but only once it has made one: until then the
+    // newest is the previous server's (whose "online" would read as this one being up). Its folder is made a moment after
+    // the process starts; the seconds allow for the start time being taken a little late.
+    public const int LogTolerance = 10;
+
     // What a running server's log says about it: ready, the address it registered with the server browser and its direct
     // join code (public servers), the port it listens on. Read again only while the log grows and something is missing.
     public ServerInfo Info(ServerProc proc)
@@ -88,7 +93,7 @@ public class Launch
         if (!done)
         {
             var log = ServerLog(proc);
-            if (log != null && log.CreationTime >= proc.Started.AddMinutes(-1) && log.Length != si.LogLength)
+            if (log != null && log.CreationTime >= proc.Started.AddSeconds(-LogTolerance) && log.Length != si.LogLength)
             {
                 try
                 {
@@ -195,13 +200,12 @@ public class Launch
         if (parent > 0)
             foreach (var (cmd, cl) in Native.ProcessesNamed("cmd"))
                 if (cmd.Id == parent && cl.Contains("start-server.bat", StringComparison.OrdinalIgnoreCase)) { try { cmd.Kill(); } catch { } }
-        bool asked = false;
+        // RCON first (a "monitor" login may not shut it down: then Ctrl+C after 20 s), killed only when neither works.
         if (rcon is { LoggedIn: true, Closed: false })
         {
-            try { await rcon.SendAsync("#shutdown", 3000, 0); asked = true; } catch { }
+            try { await rcon.SendAsync("#shutdown", 3000, 0); if (await Task.Run(() => p.WaitForExit(20000))) return true; } catch { }
         }
-        if (!asked) asked = Native.SendCtrlC(proc.Id);
-        if (asked && await Task.Run(() => p.WaitForExit(waitMs))) return true;
+        if (Native.SendCtrlC(proc.Id) && await Task.Run(() => p.WaitForExit(waitMs))) return true;
         try { p.Kill(); } catch { }
         return await Task.Run(() => p.WaitForExit(5000));
     }
@@ -242,6 +246,17 @@ public class Launch
         Process.Start(new ProcessStartInfo(Path.Combine(app.ServerDir, "ArmaReforgerServer.exe"), Native.JoinArgs(args))
         { WorkingDirectory = app.ServerDir, UseShellExecute = false, CreateNoWindow = true });
 
+    // Where the game hosts a scenario it runs itself (PLAY single-player / PLAY SOLO): it listens on 0.0.0.0:2001 unless
+    // given -addr, and can't start at all ("Unable to start replication") when a server already has that port. -bindPort
+    // is ignored. This PC only, on a free port away from the servers' 2001/2002.
+    public static string GameServerAddress()
+    {
+        var used = System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Select(e => e.Port).ToHashSet();
+        int port = 2301;
+        while (used.Contains(port)) port++;
+        return $"127.0.0.1:{port}";
+    }
+
     public static List<string> ModArgs(IEnumerable<string> dirs, string addons)
     {
         var a = new List<string>();
@@ -265,14 +280,91 @@ public class Launch
     // Test hook: when set, StartGame calls it instead of starting the game.
     public Action<List<string>> StartGameHook;
     public Action AfterGameStart;
+    // Test hooks for EnsureSteam: Steam's state, and starting it; how long to wait and how long a login must hold.
+    public Func<(bool Running, bool LoggedIn)> SteamStateHook;
+    public Action<string> StartSteamHook;
+    public TimeSpan SteamTimeout = TimeSpan.FromMinutes(2), SteamSettle = TimeSpan.FromSeconds(15), SteamSettleAfterLogin = TimeSpan.FromSeconds(3);
 
-    // Starts the game with the arguments plus the launch options from ADVANCED.
-    public void StartGame(IEnumerable<string> arguments = null)
+    // The game needs the Steam client running and logged in; started without it, it stops at "SteamAPI_Init failed. Is
+    // Steam running?" / "Unable to initialize the game". Steam's ActiveProcess key names its process and logged-in user
+    // while it runs. A clean exit sets both to 0; a crash leaves them behind - so the process has to really be there too.
+    public static (bool Running, bool LoggedIn) SteamState()
+    {
+        using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam\ActiveProcess");
+        int pid = key?.GetValue("pid") is int p ? p : 0;
+        int user = key?.GetValue("ActiveUser") is int u ? u : 0;
+        if (pid <= 0) return (false, false);
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            bool running = !proc.HasExited && proc.ProcessName.Equals("steam", StringComparison.OrdinalIgnoreCase);
+            return (running, running && user != 0);
+        }
+        catch { return (false, false); }
+    }
+
+    public static bool SteamReady() => SteamState().LoggedIn;
+
+    // Starts Steam (to the tray) when it isn't running and waits until it's logged in - up to 2 minutes, keeping the window
+    // responsive. Measured 2026-10-23: a Steam starting after a clean exit writes its process at once and the user ~4 s
+    // later, when logged in; after a crash the old user is still there, so a just-started Steam looks logged in for a few
+    // seconds until it clears it to log in. So once Steam was seen logged out, a login must hold 3 s; if it never was, 15 s.
+    // False (after saying why) when it doesn't come up.
+    public bool EnsureSteam(Action<string> status = null)
+    {
+        if (StartGameHook != null && SteamStateHook == null) return true;   // tests that don't start anything
+        var state = SteamStateHook ?? SteamState;
+        if (state().LoggedIn) return true;
+        var exe = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam")?.GetValue("SteamExe") as string;
+        if (StartSteamHook == null && (string.IsNullOrEmpty(exe) || !File.Exists(exe)))
+        {
+            Ui.Message("Steam isn't running, and steam.exe wasn't found to start it. Start Steam, then try again.", MessageBoxIcon.Warning);
+            return false;
+        }
+        status?.Invoke("Steam isn't running - starting it (the game needs it)...");
+        if (StartSteamHook != null) StartSteamHook(exe);
+        else Process.Start(new ProcessStartInfo(exe, "-silent") { UseShellExecute = true });
+        var until = DateTime.Now + SteamTimeout;
+        bool sawLoggedOut = false;
+        DateTime? loggedInSince = null;
+        while (DateTime.Now < until)
+        {
+            var s = state();
+            if (!s.LoggedIn)
+            {
+                loggedInSince = null;
+                if (s.Running) sawLoggedOut = true;
+            }
+            else
+            {
+                loggedInSince ??= DateTime.Now;
+                if (DateTime.Now - loggedInSince >= (sawLoggedOut ? SteamSettleAfterLogin : SteamSettle))
+                {
+                    status?.Invoke("Steam is up.");
+                    return true;
+                }
+            }
+            Pause(250);
+        }
+        Ui.Message("Steam didn't finish starting within 2 minutes (it may be updating, or waiting for you to log in). Once it's up, try again.", MessageBoxIcon.Warning);
+        return false;
+    }
+    static void Pause(int ms)
+    {
+        var end = DateTime.Now.AddMilliseconds(ms);
+        while (DateTime.Now < end) { Application.DoEvents(); Thread.Sleep(30); }
+    }
+
+    // Starts the game with the arguments plus the launch options from ADVANCED, starting Steam first if it isn't running.
+    // False when it didn't start.
+    public bool StartGame(IEnumerable<string> arguments = null, Action<string> status = null)
     {
         var all = (arguments ?? Enumerable.Empty<string>()).Concat(app.Data.AdvancedArgs()).Where(a => !string.IsNullOrEmpty(a)).ToList();
-        if (StartGameHook != null) { StartGameHook(all); return; }
+        if (StartGameHook != null) { StartGameHook(all); return true; }
+        if (!EnsureSteam(status)) return false;
         Process.Start(new ProcessStartInfo(Path.Combine(app.GameDir, "ArmaReforgerSteam.exe"), Native.JoinArgs(all)) { WorkingDirectory = app.GameDir, UseShellExecute = false });
         AfterGameStart?.Invoke();
+        return true;
     }
 
     public static void Open(string target)

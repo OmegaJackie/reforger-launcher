@@ -3,7 +3,8 @@ using System.Text.RegularExpressions;
 namespace ReforgerLauncher;
 
 // The Scenarios tab of a config / preset: every scenario on this PC (base game, downloaded mods, unpublished mod-src
-// projects) like the game's own scenario browser, with PLAY (this PC), HOST (a server for others) and JOIN.
+// projects) like the game's own scenario browser, with PLAY (this PC), PLAY SOLO (multiplayer ones in the game itself),
+// HOST (a server for others) and JOIN.
 public partial class MainForm
 {
     ListView scenList;
@@ -12,7 +13,7 @@ public partial class MainForm
     Label scenCount, detTitle, detMeta, detStatus;
     TextBox detDesc;
     PictureBox detImage;
-    Button playButton, hostButton, joinButton;
+    Button playButton, soloButton, hostButton, joinButton;
     int scenSort = -1;
     bool scenDesc;
     readonly Dictionary<string, Image> thumbs = new();
@@ -48,17 +49,20 @@ public partial class MainForm
 
         playButton = Ui.NewButton("PLAY", Play, "primary");
         playButton.AutoSize = false; playButton.Size = new Size(360, 50); playButton.Font = new Font("Segoe UI Semibold", 14f);
+        // Multiplayer scenarios only (UpdateScenarioDetails halves PLAY for it).
+        soloButton = Ui.NewButton("PLAY SOLO", PlaySolo);
+        soloButton.AutoSize = false; soloButton.Size = new Size(177, 50); soloButton.Font = playButton.Font; soloButton.Visible = false;
         hostButton = Ui.NewButton("HOST", HostScenario);
         hostButton.AutoSize = false; hostButton.Size = new Size(177, 38); hostButton.Font = new Font("Segoe UI Semibold", 10.5f);
         joinButton = Ui.NewButton("JOIN", JoinScenario);
         joinButton.AutoSize = false; joinButton.Size = new Size(177, 38); joinButton.Font = hostButton.Font;
-        Tips.Set(playButton, "This PC only: starts the scenario with this list's mods (a local server for multiplayer ones) and opens the game into it. " +
-            "Works with unpublished mods too. Also a double-click on a scenario.");
+        Tips.Set(soloButton, "Just you, inside the game, like the game's own Play: no separate server, so it starts faster. " +
+            "With this list's mods; works with unpublished mods too.");
         Tips.Set(hostButton, "A server for others. A server config: makes this its scenario (adding the mods it needs) and starts the server. " +
             "A game preset: makes a new server config with these mods and this scenario.");
         Tips.Set(joinButton, "Joins the server on this PC running this scenario, else opens the game's server browser.");
         var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, WrapContents = true, Padding = new Padding(0, 10, 0, 0) };
-        actions.Controls.AddRange(new Control[] { playButton, hostButton, joinButton });
+        actions.Controls.AddRange(new Control[] { playButton, soloButton, hostButton, joinButton });
         details.Controls.Add(detDesc);
         details.Controls.Add(info);
         details.Controls.Add(detImage);
@@ -164,13 +168,21 @@ public partial class MainForm
     {
         var s = SelectedScenario;
         var item = CurrentItem;
-        foreach (var b in new[] { playButton, hostButton, joinButton }) b.Enabled = s != null;
+        foreach (var b in new[] { playButton, soloButton, hostButton, joinButton }) b.Enabled = s != null;
         if (s == null)
         {
             detTitle.Text = "No scenario matches"; detMeta.Text = ""; detStatus.Visible = false; detDesc.Text = "";
             detImage.Image = null;
             return;
         }
+        // Multiplayer: PLAY (a local server + the game joining it) and PLAY SOLO side by side.
+        bool mp = s.Players != 1;
+        soloButton.Visible = mp;
+        playButton.Width = mp ? 177 : 360;
+        Tips.Set(playButton, mp
+            ? "This PC only: starts a server for the scenario with this list's mods, then opens the game into it when it's ready " +
+              "(about a minute). It runs like a real server. Works with unpublished mods too. Also a double-click on a scenario."
+            : "This PC only: the game runs the scenario with this list's mods. Works with unpublished mods too. Also a double-click on a scenario.");
         detImage.Image = Thumbnail(s);
         detTitle.Text = s.Name;
         var players = s.Players == 1 ? "1 player" : s.Players > 0 ? $"up to {s.Players} players" : "players not stated";
@@ -195,12 +207,18 @@ public partial class MainForm
         detDesc.Visible = s.Description.Length > 0;
     }
 
-    void Play()
+    void Play() => PlayScenario(false);
+
+    // PLAY SOLO: a multiplayer scenario run by the game itself, like the game's own Play.
+    void PlaySolo() => PlayScenario(true);
+
+    void PlayScenario(bool solo)
     {
         var s = SelectedScenario;
         if (s == null) return;
         if (App.GameDir == null) { Ui.Message("The game (ArmaReforgerSteam.exe) wasn't found in your Steam libraries.", MessageBoxIcon.Error); return; }
         if (Game.Running().Count > 0) { Ui.Message("Arma Reforger is already running. Close it first: Play starts it with this mod list."); return; }
+        if (!Launch.EnsureSteam(t => Status.Text = t)) return;
         var item = CurrentItem;
         Preset set; LocalPlan plan;
         SetBusy(true, $"Getting {s.Name} ready...");
@@ -211,11 +229,11 @@ public partial class MainForm
                 "\n\nDownload them in the game's Workshop, or untick them on the Mods tab.", MessageBoxIcon.Warning);
             return;
         }
-        if (s.Players == 1)
+        if (solo || s.Players == 1)
         {
-            // Single-player: the game runs the scenario itself.
-            Launch.StartGame(new[] { "-server", s.Id }.Concat(Launch.ModArgs(plan.Dirs, plan.Addons)));
-            Status.Text = $"Starting the game into {s.Name} ({set.Mods.Count} mods).";
+            // Single-player or solo: the game runs the scenario itself.
+            if (Launch.StartGame(new[] { "-server", s.Id, "-addr", Launch.GameServerAddress() }.Concat(Launch.ModArgs(plan.Dirs, plan.Addons)), t => Status.Text = t))
+                Status.Text = $"Starting the game into {s.Name}{(solo ? " (solo)" : "")} ({set.Mods.Count} mods).";
             return;
         }
         if (App.ServerDir == null) { Ui.Message("ArmaReforgerServer.exe wasn't found (start-server.bat's SERVER_DIR or Steam), so multiplayer scenarios can't be played locally.", MessageBoxIcon.Error); return; }
@@ -274,7 +292,7 @@ public partial class MainForm
         {
             if (Game.Running().Count > 0) { Ui.Message("Arma Reforger is already running. Close it first: joining starts it with the server's mods."); return; }
             if (!Launch.IsReady(local) && !Ui.Ask("The local server is still starting (top right says when it's ready). Start the game anyway? It retries until the server is up.")) return;
-            Launch.StartGame(Launch.ClientArgsFor(local));
+            if (!Launch.StartGame(Launch.ClientArgsFor(local), t => Status.Text = t)) return;
             Status.Text = "Game starting; it joins the server on this PC by itself (Steam must be running).";
             return;
         }

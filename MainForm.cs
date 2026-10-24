@@ -128,7 +128,7 @@ public partial class MainForm : Form
         var right = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, WrapContents = false };
         right.Controls.AddRange(new Control[] { serverStatus, stopLink, Bar(),
             Link("server log", OpenServerLog, "The running server's console.log (or the last local test's)."), Bar(),
-            Link("open game", () => { if (App.GameDir != null) Launch.StartGame(); else Launch.Open($"steam://rungameid/{Game.AppId}"); }, "Starts Arma Reforger with the launch options from Advanced."), Bar(),
+            Link("open game", () => { if (App.GameDir != null) Launch.StartGame(null, t => Status.Text = t); else Launch.Open($"steam://rungameid/{Game.AppId}"); }, "Starts Arma Reforger with the launch options from Advanced (and Steam first, if it isn't running)."), Bar(),
             Link("workshop", () => Launch.Open("https://reforger.armaplatform.com/workshop"), "reforger.armaplatform.com/workshop in your browser.") });
         bar.Controls.Add(right);
         bar.Controls.Add(flow);
@@ -548,7 +548,8 @@ public partial class MainForm : Form
                 var name = pendingJoin.Name;
                 pendingJoin = null;
                 if (Game.Running().Count > 0) Status.Text = $"{name} is ready, but the game is already running: close it and click JOIN.";
-                else { Launch.StartGame(Launch.ClientArgsFor(local)); Status.Text = $"{name} is ready - starting the game into it."; }
+                else if (Launch.StartGame(Launch.ClientArgsFor(local), t => Status.Text = t)) Status.Text = $"{name} is ready - starting the game into it.";
+                else Status.Text = $"{name} is ready, but the game couldn't start (Steam) - JOIN on its Scenarios tab once Steam is up.";
             }
         }
         if (procs.Count == 0)
@@ -614,7 +615,13 @@ public partial class MainForm : Form
             UpdateTitle();
             UpdateItemHeader();
         }
-        if (inApp) OfferRcon(item);
+        if (!PrepareRcon(item, inApp)) return;
+        var problems = ConfigProblems(item.Config);
+        if (problems.Count > 0)
+        {
+            Ui.Message($"The server would refuse {item.Name}:\n\n" + string.Join("\n", problems.Select(p => "- " + p)) + "\n\nFix it on its Configuration tab.", MessageBoxIcon.Warning);
+            return;
+        }
         if (!ConfirmPortFree(Launch.PortOf(item.Config))) return;
         if (inApp)
         {

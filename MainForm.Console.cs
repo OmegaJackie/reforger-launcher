@@ -54,7 +54,9 @@ public partial class MainForm
     public ServerProc ConsoleProc;               // the server the Console shows
     Process ownedProc;                           // started here: restarted when it stops by itself
     string ownedConfig = "";
-    bool stoppingOwned;
+    bool stoppingOwned, ownedReady;
+    int ownedLogStart;
+    readonly List<DateTime> autoRestarts = new();
     DateTime? restartAt;
     public RconClient Rcon;
     int rconPid;
@@ -350,7 +352,7 @@ public partial class MainForm
     {
         if (ConsoleProc == null || tail != null) return;
         var log = Launch.ServerLog(ConsoleProc);
-        if (log == null || log.CreationTime < ConsoleProc.Started.AddMinutes(-1)) return;
+        if (log == null || log.CreationTime < ConsoleProc.Started.AddSeconds(-Launch.LogTolerance)) return;
         long start = 0;
         if (!fromStart && log.Length > 400_000) start = log.Length - 400_000;
         tail = new LogTail(log.FullName, start);
@@ -364,19 +366,33 @@ public partial class MainForm
         if (tail == null && ConsoleProc != null) OpenTail(ownedProc != null && ConsoleProc.Id == ownedProc.Id);
         if (tail != null) { var lines = tail.Read(); if (lines.Count > 0) AddLines(lines); }
 
-        // The server started here stopped: by STOP / #shutdown, or by itself (then it's started again).
+        if (ownedProc != null && !ownedReady && ConsoleProc?.Id == ownedProc.Id && Launch.Info(ConsoleProc).Ready) ownedReady = true;
+
+        // The server started here stopped: by STOP / #shutdown, or by itself. Only a server that was up is started
+        // again (a crash), and not more than 3 times in 10 minutes; one that stops while starting has a reason in its log
+        // (a config it refuses, a missing mod...) that another try won't change.
         if (ownedProc != null && HasExited(ownedProc))
         {
             int code = 0; try { code = ownedProc.ExitCode; } catch { }
             if (tail != null) AddLines(tail.Read());
-            if (stoppingOwned) { AddNote("The server stopped."); ownedProc = null; stoppingOwned = false; }
-            else if (App.Data.Advanced.AutoRestart && ownedConfig.Length > 0)
+            autoRestarts.RemoveAll(t => t < DateTime.Now.AddMinutes(-10));
+            if (stoppingOwned) AddNote("The server stopped.");
+            else if (!ownedReady)
+            {
+                var errors = logLines.Skip(Math.Min(ownedLogStart, logLines.Count)).Where(l => l.Kind == 'e' && !l.Text.Contains("RESOURCES"))
+                    .Select(l => Regex.Replace(l.Text, @"^\S+\s+\w+\s+\(E\):\s*", "").Trim()).Distinct().Take(4).ToList();
+                AddNote($"The server stopped while starting (exit code {code}), so it isn't started again." + (errors.Count > 0 ? " Its log says: " + string.Join(" / ", errors) : ""));
+                Status.Text = "The server couldn't start - the Console shows why.";
+            }
+            else if (App.Data.Advanced.AutoRestart && ownedConfig.Length > 0 && autoRestarts.Count < 3)
             {
                 AddNote($"The server stopped by itself (exit code {code}). Starting it again in 15 s - STOP cancels that.");
+                autoRestarts.Add(DateTime.Now);
                 restartAt = DateTime.Now.AddSeconds(15);
-                ownedProc = null;
             }
-            else { AddNote($"The server stopped by itself (exit code {code})."); ownedProc = null; }
+            else AddNote($"The server stopped by itself (exit code {code})" + (autoRestarts.Count >= 3 ? " for the third time in 10 minutes, so it isn't started again." : "."));
+            ownedProc = null;
+            stoppingOwned = false;
             CloseRcon();
             UpdateServerStatus();
         }
@@ -507,7 +523,8 @@ public partial class MainForm
     {
         if (App.ServerDir == null) { Ui.Message("ArmaReforgerServer.exe wasn't found (start-server.bat's SERVER_DIR or Steam).", MessageBoxIcon.Error); return; }
         var p = Launch.StartServer(configPath);
-        ownedProc = p; ownedConfig = configPath; stoppingOwned = false; restartAt = null;
+        ownedProc = p; ownedConfig = configPath; stoppingOwned = false; restartAt = null; ownedReady = false;
+        ownedLogStart = logLines.Count;
         SwitchConsole(new ServerProc { Id = p.Id, Config = configPath, Profile = Path.Combine(App.Root, "profile"), Started = DateTime.Now }, true);
         if (interactive) ShowPage("Console");
         UpdateServerStatus();
@@ -682,17 +699,17 @@ public partial class MainForm
     // ---------------------------------------------------------------------------------------------------------------
     // RCON settings
 
-    // Adds RCON to a config: this PC only, a generated password. True when it's on.
+    // Adds RCON to a config, or completes one the server would refuse: what's missing becomes this PC only (127.0.0.1),
+    // port 19999, a generated password, admin; settings already there stay. The config is saved.
     public bool EnableRcon(ConfigItem item)
     {
-        if (Json.Has(item.Config, "rcon") && Json.Str(item.Config, "rcon.password").Length > 0) return true;
         const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-        var password = new string(Enumerable.Range(0, 16).Select(_ => chars[System.Security.Cryptography.RandomNumberGenerator.GetInt32(chars.Length)]).ToArray());
         var rcon = Json.Section(item.Config, "rcon");
-        rcon["address"] = "127.0.0.1";
-        rcon["port"] = 19999;
-        rcon["password"] = password;
-        rcon["permission"] = "admin";
+        if (Json.Str(rcon, "address").Length == 0) rcon["address"] = "127.0.0.1";
+        if (Json.Long(rcon, "port") <= 0) rcon["port"] = 19999;
+        if (Json.Str(rcon, "password").Length < 3)
+            rcon["password"] = new string(Enumerable.Range(0, 16).Select(_ => chars[System.Security.Cryptography.RandomNumberGenerator.GetInt32(chars.Length)]).ToArray());
+        if (Json.Str(rcon, "permission").Length == 0) rcon["permission"] = "admin";
         App.SaveConfig(item);
         var node = FindNode(item);
         if (node != null) node.Text = NodeText(item);
@@ -701,14 +718,26 @@ public partial class MainForm
         return true;
     }
 
-    // Before a config starts here: offer RCON once if it has none.
-    void OfferRcon(ConfigItem item)
+    // Before a config starts: RCON settings the server would refuse get completed (or nothing starts), and - for a server
+    // run here - a config without RCON is offered it once. False when the start should stop.
+    bool PrepareRcon(ConfigItem item, bool offer)
     {
-        if (Json.Has(item.Config, "rcon") || App.Data.RconOffered.Contains(item.Name, StringComparer.OrdinalIgnoreCase)) return;
+        if (RconIncomplete(item.Config))
+        {
+            var has = string.Join(", ", (Json.Get(item.Config, "rcon") as System.Text.Json.Nodes.JsonObject)?.Select(kv => kv.Key) ?? Enumerable.Empty<string>());
+            if (!Ui.Ask($"{item.Name} has RCON settings ({(has.Length > 0 ? has : "empty")}) but no RCON address or password, so the server refuses the whole " +
+                "config (\"required params are missing: address password\").\n\nComplete them? What's missing becomes this PC only (127.0.0.1), port 19999 and " +
+                "a generated password; the RCON settings already there stay.\n\n(No: nothing starts - fix or remove them on its Configuration tab.)")) return false;
+            EnableRcon(item);
+            Status.Text = $"Completed the RCON settings of {item.Name}.";
+            return true;
+        }
+        if (!offer || Json.Has(item.Config, "rcon") || App.Data.RconOffered.Contains(item.Name, StringComparer.OrdinalIgnoreCase)) return true;
         if (Ui.Ask($"Turn on RCON for {item.Name}?\n\nThe Console tab then lists the players, kicks and bans, takes server commands and stops the server " +
             "cleanly. It's added to the config for this PC only (127.0.0.1:19999) with a generated password.\n\n(No: you won't be asked again for this config.)"))
             EnableRcon(item);
         else { App.Data.RconOffered.Add(item.Name); SaveData(); }
+        return true;
     }
 
     void EnableRconForConsole()

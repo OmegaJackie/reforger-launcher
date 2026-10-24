@@ -344,7 +344,7 @@ public partial class MainForm
                 $"Yes - join now with {with} (selected on the Server tab)\nNo - open the game and join it there (Direct connect; the address is copied)",
                 MessageBoxIcon.Question, MessageBoxButtons.YesNoCancel);
             if (answer == DialogResult.Cancel) return;
-            if (answer == DialogResult.No) { Ui.Copy(rec.Addr); Launch.StartGame(); Status.Text = $"Game starting - Direct connect to {rec.Addr} (copied)."; return; }
+            if (answer == DialogResult.No) { Ui.Copy(rec.Addr); if (Launch.StartGame(null, t => Status.Text = t)) Status.Text = $"Game starting - Direct connect to {rec.Addr} (copied)."; return; }
             mods = item != null ? item.Mods.Keys.ToList() : new List<string>();
         }
         var missing = mods.Where(g => !App.Installed.ContainsKey(g)).ToList();
@@ -354,14 +354,15 @@ public partial class MainForm
             var more = missing.Count > 15 ? $"\n... and {missing.Count - 15} more" : "";
             if (Ui.Ask($"{missing.Count} of {name}'s mods aren't downloaded:\n\n{names}{more}\n\nThe game downloads them when you join from its server browser. Open the game now? (The address is copied for Direct connect.)"))
             {
-                Ui.Copy(rec.Addr); Launch.StartGame();
+                Ui.Copy(rec.Addr);
+                if (!Launch.StartGame(null, t => Status.Text = t)) return;
                 Status.Text = $"Game starting - Direct connect to {rec.Addr} (copied).";
             }
             return;
         }
         var args = new List<string> { "-client", "-addr", rec.Addr };
         if (mods.Count > 0) args.AddRange(new[] { "-addons", string.Join(",", mods) });
-        Launch.StartGame(args);
+        if (!Launch.StartGame(args, t => Status.Text = t)) return;
         rec.Times = new[] { DateTime.Now.ToString("yyyy-MM-dd HH:mm") }.Concat(rec.Times.Where(t => !string.IsNullOrEmpty(t))).Take(20).ToList();
         rec.Hidden = false;
         SaveData();

@@ -256,13 +256,25 @@ public partial class MainForm
         var cfg = item.Config;
         var list = new List<string>();
         foreach (var row in (SrvRows ?? new()).Concat(SrvOtherRows)) if (row.Invalid != null) list.Add($"{row.Spec.L}: {row.Invalid} (not applied)");
-        if (Json.Str(cfg, "game.name").Length == 0) list.Add("Server name is required.");
-        if (Json.Str(cfg, "game.scenarioId").Length == 0) list.Add("Scenario is required.");
-        if (Json.Has(cfg, "a2s") && !Json.Has(cfg, "a2s.address")) list.Add("A2S needs an address (0.0.0.0 = all).");
-        if (Json.Has(cfg, "rcon") && !(Json.Has(cfg, "rcon.address") && Json.Has(cfg, "rcon.password"))) list.Add("RCON needs an address and a password (or remove its other settings).");
+        list.AddRange(ConfigProblems(cfg));
         srvProblems.Text = string.Join("\n", list.Select(x => "• " + x));
         srvProblems.Visible = list.Count > 0;
     }
+
+    // What makes the dedicated server refuse a config ("JSON is invalid!") before it even starts.
+    public static List<string> ConfigProblems(System.Text.Json.Nodes.JsonObject cfg)
+    {
+        var list = new List<string>();
+        if (Json.Str(cfg, "game.name").Length == 0) list.Add("Server name is required.");
+        if (Json.Str(cfg, "game.scenarioId").Length == 0) list.Add("Scenario is required.");
+        if (Json.Has(cfg, "a2s") && !Json.Has(cfg, "a2s.address")) list.Add("A2S needs an address (0.0.0.0 = all).");
+        if (RconIncomplete(cfg)) list.Add("RCON needs an address and a password (or remove its other settings).");
+        return list;
+    }
+
+    // An "rcon" section the server would refuse: no address, or no password of 3+ characters.
+    public static bool RconIncomplete(System.Text.Json.Nodes.JsonObject cfg) =>
+        Json.Has(cfg, "rcon") && (Json.Str(cfg, "rcon.address").Length == 0 || Json.Str(cfg, "rcon.password").Length < 3);
 
     void UpdateServerOther(ConfigItem item)
     {
